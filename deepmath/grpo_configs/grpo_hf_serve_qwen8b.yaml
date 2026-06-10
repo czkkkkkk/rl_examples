@@ -1,0 +1,82 @@
+# GRPO config for Qwen3-8B: FSDP=8 training (cores 0-7) + serve-mode HF rollout
+# on a TP=8 server (cores 8-15). Launch hf_serve/run_hf_serve_qwen8b_tp8dp1.sh
+# first, then run_neuron.sh.
+#
+# This is a SHORT SMOKE config (max_steps small) to validate the full
+# FSDP-train + TP-serve + ZMQ weight-sync loop end-to-end on 8B.
+
+# Output
+output_dir: output_qwen8b
+
+# Model init kwargs
+model_init_kwargs:
+  attn_implementation: eager
+  torch_dtype: float32
+  # device_map=null is REQUIRED for FSDP rank-0-only loading. create_model_from_path
+  # otherwise forces device_map="auto", which routes from_pretrained through the
+  # accelerate dispatch loader and BYPASSES the FSDP meta-device path
+  # (modeling_utils.py:4512) — so every rank loads full weights and host RAM OOMs.
+  # With null + ACCELERATE_USE_FSDP=1 + FSDP_CPU_RAM_EFFICIENT_LOADING=1 (set in
+  # run_neuron_qwen8b.sh), only LOCAL_RANK 0 reads the checkpoint.
+  device_map: null
+
+# Training arguments
+max_steps: 10
+per_device_train_batch_size: 1
+# grad_accum=1 with FSDP=32: generation batch = num_processes(32) x pdbs(1) x
+# accum(1) = 32 prompts, repeated over num_generations=2. Keeps the per-step
+# rollout small so the TP=8 server doesn't re-OOM as FSDP scales up.
+gradient_accumulation_steps: 1
+# sync_each_batch=True forces FSDP to reduce-scatter gradients back to sharded
+# form after EVERY accumulation microbatch, instead of holding full unsharded
+# gradients across the no_sync window (the default). This trades a bit of speed
+# (more collectives) for much lower peak memory during accumulation — the fix
+# for the backward OOM seen at grad_accum>1.
+accelerator_config:
+  gradient_accumulation_kwargs:
+    sync_each_batch: true
+# NOTE: do NOT set gradient_checkpointing here — fsdp8.yaml already enables
+# fsdp_activation_checkpointing, and transformers errors if both are True.
+# FSDP's activation checkpointing is already active.
+gradient_checkpointing: false
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+learning_rate: 5e-7
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+
+# GRPO specific parameters
+# Smoke-test footprint: the first OOM came from a rollout of
+# (8 prompts x num_generations=8) = 64 sequences at seq len ~1537
+# (512 prompt + 1025 completion), which exhausted a Neuron core. Shrink both the
+# fan-out and the lengths so the rollout batch fits in 8B/TP=8 device memory.
+beta: 0.001
+max_completion_length: 512
+num_generations: 8
+# Must match the server's --max-prompt-length so shapes stay fixed for the
+# rollout graph. The 8B smoke server is launched with --max-prompt-length 256.
+pad_to_multiple_of: 256
+
+# Generation backend: HF serve-mode server (HTTP + ZMQ weight sync)
+use_vllm: false
+use_nkipy: false
+use_hf: true
+hf_server_host: 127.0.0.1
+hf_server_port: 30000
+hf_server_timeout: 240.0
+hf_zmq_port: 5558
+# Static KV cache → stable shapes across decode steps.
+cache_implementation: static
+# Chunked prefill on the server side.
+generation_kwargs:
+  prefill_chunk_size: 128
+
+# Logging arguments
+logging_strategy: steps
+logging_steps: 1
+report_to: ["tensorboard"]
+save_strategy: "steps"
+save_steps: 10000
+seed: 42
+
+log_completions: true
