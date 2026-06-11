@@ -59,7 +59,6 @@ pad_to_multiple_of: 256
 
 # Generation backend: HF serve-mode server (HTTP + ZMQ weight sync)
 use_vllm: false
-use_nkipy: false
 use_hf: true
 hf_server_host: 127.0.0.1
 hf_server_port: 30000

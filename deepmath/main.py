@@ -14,6 +14,41 @@ import torch
 torch.manual_seed(0)
 
 
+def _patch_accelerate_gather_for_neuron():
+    """Flatten tensors before all_gather_into_tensor in accelerate's _gpu_gather.
+
+    torch_neuronx's all_gather lowering indexes tensor.shape[0] of the input;
+    a 0-d/scalar input (e.g. per-rank reward tensors) raises
+    `IndexError: tuple index out of range`. The output buffer is already sized
+    by numel, so gathering a flat view is equivalent.
+    """
+    from accelerate.utils import operations
+
+    def _gpu_gather(tensor):
+        state = operations.PartialState()
+
+        def _gpu_gather_one(t):
+            if t.ndim == 0:
+                t = t.clone()[None]
+            if not t.is_contiguous():
+                t = t.contiguous()
+            output = torch.empty(
+                state.num_processes * t.numel(), dtype=t.dtype, device=state.device
+            )
+            torch.distributed.all_gather_into_tensor(output, t.view(-1))
+            return output.view(-1, *t.size()[1:])
+
+        return operations.recursively_apply(_gpu_gather_one, tensor, error_on_other_type=True)
+
+    # accelerate's public `gather` dispatches to operations._gpu_gather at call
+    # time, so patching the module attribute is enough for trl's imports too.
+    operations._gpu_gather = _gpu_gather
+
+
+if os.environ.get("ON_NEURON") == "1":
+    _patch_accelerate_gather_for_neuron()
+
+
 def _neuron_sync():
     """Flush async Neuron kernels so perf_counter measures real device time."""
     try:
@@ -132,7 +167,6 @@ if os.environ.get("ON_NEURON") == "1":
 if (
     os.environ.get("ON_NEURON") == "1"
     and not config.use_vllm
-    and not config.use_nkipy
     and not getattr(config, "use_hf", False)
 ):
     # Compile only the rollout forward. _fsdp2_unshard_for_generation swaps

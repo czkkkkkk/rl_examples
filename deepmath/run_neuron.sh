@@ -43,7 +43,7 @@ export TRANSFORMERS_OFFLINE=1
 export ACCELERATE_USE_FSDP=1
 export FSDP_CPU_RAM_EFFICIENT_LOADING=1
 
-source /fsx/zkcai/miniconda3/bin/activate eager_public
+source /fsx/zkcai/miniconda3/bin/activate test_eager
 SCRIPT_DIR=$(dirname "$(realpath "$0")")
 
 CONFIG_FILE="$SCRIPT_DIR/accelerate_configs/fsdp16.yaml"

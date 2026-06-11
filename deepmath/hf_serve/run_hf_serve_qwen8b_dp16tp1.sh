@@ -21,7 +21,7 @@ export HF_SERVE_COMPILE_FULLGRAPH=1
 # Quiet the per-rollout decode/print so it doesn't skew timings.
 export HF_SERVE_PRINT_ROLLOUTS=0
 
-source /fsx/zkcai/miniconda3/bin/activate eager_public
+source /fsx/zkcai/miniconda3/bin/activate test_eager
 
 trl hf-serve \
     --model Qwen/Qwen3-8B \
@@ -34,5 +34,4 @@ trl hf-serve \
     --max-prompt-length 256 \
     --pad-to-multiple 256 \
     --cache-implementation static \
-    --world-size 16 \
-    --tp-size 1
+    --world-size 16
